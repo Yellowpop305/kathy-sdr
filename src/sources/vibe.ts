@@ -4,25 +4,27 @@ import { log } from "../logger.js";
 import type { Account, Contact } from "../types.js";
 
 /**
- * Vibe Prospecting / Explorium data client.
+ * Explorium (Vibe Prospecting) data client — matched to the documented
+ * AgentSource REST API (https://developers.explorium.ai).
  *
- * NOTE on endpoints: the exact REST paths/payloads for Explorium's API may
- * differ from the shapes below — they mirror the MCP tool surface used to
- * design Kathy (fetch businesses, fetch prospects, enrich contacts). Adjust
- * `PATHS` and the request bodies to match the API key tier you're issued.
- * Everything else (filters, the ICP) is locked to the playbook.
+ *   - Fetch businesses:  POST /v1/businesses
+ *   - Fetch prospects:   POST /v1/prospects
+ *   - Enrich contacts:   POST /v1/prospects/contacts_information/enrich  (per prospect_id)
+ *
+ * Auth header is `api_key`. EXPLORIUM_BASE_URL defaults to https://api.explorium.ai/v1.
  */
 
 const PATHS = {
-  fetchBusinesses: "/businesses/fetch",
-  fetchProspects: "/prospects/fetch",
-  enrichContacts: "/prospects/enrich/contacts",
+  businesses: "/businesses",
+  prospects: "/prospects",
+  enrichContacts: "/prospects/contacts_information/enrich",
 };
 
-// ---- ICP filters (from the playbook) ----------------------------------------
+// ---- ICP business filters (from the playbook) -------------------------------
+// NOTE: the businesses endpoint uses `country_code` (lowercase alpha-2) for HQ.
 
-export const ICP = {
-  company_country_code: { values: ["US"] },
+export const ICP_BUSINESS_FILTERS = {
+  country_code: { values: ["us"] },
   number_of_locations: { values: ["51-100", "101-1000", "1001+"] },
   linkedin_category: {
     values: [
@@ -42,12 +44,9 @@ export const ICP = {
   },
 } as const;
 
-/** Target titles per scenario (resolve to standardized titles via autocomplete in prod). */
-export const SCENARIO_TITLES: Record<string, string[]> = {
-  A: ["marketing", "brand", "creative", "store design", "visual merchandising"],
-  B: ["store design", "procurement", "purchasing", "construction", "store development"],
-  C: ["procurement", "purchasing", "category buyer", "construction", "vendor management"],
-};
+// Seniority targeted per scenario. Department-level targeting can be layered on
+// later via `job_department` once we confirm the taxonomy via autocomplete.
+const DECISION_MAKER_LEVELS = ["director", "vp", "c-suite", "manager"];
 
 async function post<T>(p: string, body: unknown): Promise<T> {
   const res = await request(`${config.EXPLORIUM_BASE_URL}${p}`, {
@@ -55,101 +54,155 @@ async function post<T>(p: string, body: unknown): Promise<T> {
     headers: {
       "content-type": "application/json",
       accept: "application/json",
-      // Explorium authenticates via the `api_key` header (not a Bearer token).
       api_key: config.EXPLORIUM_API_KEY,
     },
     body: JSON.stringify(body),
   });
   if (res.statusCode >= 400) {
     const text = await res.body.text();
-    throw new Error(`Explorium ${p} ${res.statusCode}: ${text}`);
+    throw new Error(`Explorium ${p} ${res.statusCode}: ${text.slice(0, 300)}`);
   }
   return (await res.body.json()) as T;
 }
 
 interface RawBusiness {
   business_id: string;
-  business_name: string;
-  business_domain: string;
+  name?: string;
+  business_name?: string;
+  domain?: string;
+  business_domain?: string;
+  website?: string;
+  city_name?: string;
   business_city_name?: string;
+  region?: string;
   business_region?: string;
+  naics_description?: string;
   business_naics_description?: string;
+  business_description?: string;
   business_business_description?: string;
-  business_number_of_locations_range?: string;
 }
 
 interface RawProspect {
   prospect_id: string;
-  business_id: string;
-  full_name: string;
   first_name?: string;
+  last_name?: string;
+  full_name?: string;
   job_title?: string;
-  email?: string;
-  phone_number?: string;
-  linkedin_url?: string;
+  title?: string;
+  company_name?: string;
+  linkedin?: string;
 }
 
-/** Fetch qualifying accounts (50+ US locations in target verticals). */
+interface EnrichData {
+  professions_email?: string;
+  emails?: Array<Record<string, string>>;
+  mobile_phone?: string;
+  phone_numbers?: Array<Record<string, string>>;
+}
+
+const pick = <T>(...vals: (T | undefined)[]): T | undefined =>
+  vals.find((v) => v !== undefined && v !== null && v !== "");
+
+/** Fetch qualifying accounts: 50+ US locations in target verticals. */
 export async function fetchAccounts(limit: number): Promise<Account[]> {
   if (config.DRY_RUN) return DRY_ACCOUNTS.slice(0, limit);
-  const data = await post<{ data: RawBusiness[] }>(PATHS.fetchBusinesses, {
-    filters: ICP,
-    number_of_results: limit,
+  const data = await post<{ data: RawBusiness[] }>(PATHS.businesses, {
+    mode: "full",
+    size: limit,
+    page_size: Math.min(limit, 100),
+    page: 1,
+    filters: ICP_BUSINESS_FILTERS,
+    request_context: {},
   });
   return (data.data ?? []).map((b) => ({
     businessId: b.business_id,
-    name: b.business_name,
-    domain: b.business_domain,
-    city: b.business_city_name,
-    region: b.business_region,
-    vertical: b.business_naics_description,
-    description: b.business_business_description,
-    numLocationsBucket: b.business_number_of_locations_range,
+    name: pick(b.name, b.business_name) ?? "(unknown)",
+    domain: pick(b.domain, b.business_domain, b.website) ?? "",
+    city: pick(b.city_name, b.business_city_name),
+    region: pick(b.region, b.business_region),
+    vertical: pick(b.naics_description, b.business_naics_description),
+    description: pick(b.business_description, b.business_business_description),
   }));
 }
 
-/** Fetch + contact-enrich decision-makers for an account, given its scenario. */
+/** Fetch decision-makers for an account and enrich each with email + phone. */
 export async function fetchContacts(
   account: Account,
-  scenario: string,
+  _scenario: string,
   perAccount: number,
 ): Promise<Contact[]> {
-  if (config.DRY_RUN) {
-    return DRY_CONTACTS(account).slice(0, perAccount);
+  if (config.DRY_RUN) return DRY_CONTACTS(account).slice(0, perAccount);
+
+  const baseFilters = {
+    business_id: { values: [account.businessId] },
+    has_email: { values: [true] },
+  };
+
+  // Try targeted (senior decision-makers); if the filter 422s or returns
+  // nothing, fall back to any contacts-with-email at the account.
+  let prospects: RawProspect[] = [];
+  try {
+    const targeted = await post<{ data: RawProspect[] }>(PATHS.prospects, {
+      mode: "full",
+      size: perAccount,
+      page_size: perAccount,
+      page: 1,
+      filters: { ...baseFilters, job_level: { values: DECISION_MAKER_LEVELS } },
+      request_context: {},
+    });
+    prospects = targeted.data ?? [];
+  } catch (err) {
+    log.warn("prospects.targetedFailed", { company: account.name, error: String(err) });
   }
-  const fetched = await post<{ data: RawProspect[]; table_name?: string }>(
-    PATHS.fetchProspects,
-    {
-      filters: {
-        ...ICP,
-        business_id: { values: [account.businessId] },
-        job_title: { values: SCENARIO_TITLES[scenario] ?? SCENARIO_TITLES.A },
-        has_email: true,
-      },
-      number_of_results: perAccount,
-      max_per_company: perAccount,
-    },
-  );
+  if (prospects.length === 0) {
+    const any = await post<{ data: RawProspect[] }>(PATHS.prospects, {
+      mode: "full",
+      size: perAccount,
+      page_size: perAccount,
+      page: 1,
+      filters: baseFilters,
+      request_context: {},
+    });
+    prospects = any.data ?? [];
+  }
 
-  const enriched = await post<{ data: RawProspect[] }>(PATHS.enrichContacts, {
-    table_name: fetched.table_name,
-    contact_types: ["email", "phone"],
-  });
-
-  const rows = enriched.data?.length ? enriched.data : fetched.data;
-  return (rows ?? []).map((p) => ({
-    prospectId: p.prospect_id,
-    businessId: account.businessId,
-    fullName: p.full_name,
-    firstName: p.first_name ?? p.full_name.split(" ")[0] ?? "there",
-    title: p.job_title ?? "",
-    email: p.email,
-    phone: p.phone_number,
-    linkedinUrl: p.linkedin_url,
-  }));
+  const contacts: Contact[] = [];
+  for (const p of prospects.slice(0, perAccount)) {
+    const c: Contact = {
+      prospectId: p.prospect_id,
+      businessId: account.businessId,
+      fullName: pick(p.full_name, [p.first_name, p.last_name].filter(Boolean).join(" ")) ?? "there",
+      firstName: pick(p.first_name, p.full_name?.split(" ")[0]) ?? "there",
+      title: pick(p.job_title, p.title) ?? "",
+      linkedinUrl: p.linkedin,
+    };
+    try {
+      const enriched = await post<{ data: EnrichData | EnrichData[] }>(PATHS.enrichContacts, {
+        prospect_id: p.prospect_id,
+        parameters: { contact_types: ["email", "phone"] },
+      });
+      const d = Array.isArray(enriched.data) ? enriched.data[0] : enriched.data;
+      if (d) {
+        c.email = pick(d.professions_email, firstValue(d.emails));
+        c.phone = pick(d.mobile_phone, firstValue(d.phone_numbers));
+      }
+    } catch (err) {
+      log.warn("enrich.failed", { prospectId: p.prospect_id, error: String(err) });
+    }
+    contacts.push(c);
+  }
+  return contacts;
 }
 
-// ---- DRY_RUN fixtures (let the loop run with no API key / credits) -----------
+function firstValue(arr?: Array<Record<string, string>>): string | undefined {
+  if (!arr?.length) return undefined;
+  const first = arr[0];
+  if (!first) return undefined;
+  const vals = Object.values(first);
+  return vals.length ? vals[0] : undefined;
+}
+
+// ---- DRY_RUN fixtures (run the loop with no API key / credits) --------------
 
 const DRY_ACCOUNTS: Account[] = [
   {
