@@ -71,18 +71,30 @@ interface TextBlock {
   text: string;
 }
 
+/** Detect image format from magic bytes (don't trust the HTTP header). */
+function sniffMedia(buf: Buffer): ImgMedia | null {
+  if (buf.length < 12) return null;
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return "image/png";
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return "image/gif";
+  if (buf.toString("ascii", 0, 4) === "RIFF" && buf.toString("ascii", 8, 12) === "WEBP")
+    return "image/webp";
+  return null;
+}
+
 /** Fetch an image URL and turn it into a base64 image block (null if unusable). */
 async function fetchImageBlock(url: string): Promise<ImageBlock | null> {
   try {
     const res = await request(url, { method: "GET", maxRedirections: 3 });
     if (res.statusCode >= 400) return null;
-    const media = String(res.headers["content-type"] ?? "").split(";")[0]!.trim();
-    if (!IMG_TYPES.includes(media as ImgMedia)) return null;
     const buf = Buffer.from(await res.body.arrayBuffer());
     if (buf.length === 0 || buf.length > 3_000_000) return null; // ~3MB cap
+    // Trust the actual file bytes for media_type — a mismatch makes Claude 400.
+    const media = sniffMedia(buf);
+    if (!media) return null;
     return {
       type: "image",
-      source: { type: "base64", media_type: media as ImgMedia, data: buf.toString("base64") },
+      source: { type: "base64", media_type: media, data: buf.toString("base64") },
     };
   } catch {
     return null;
