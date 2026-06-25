@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { config } from "../config.js";
 import { log } from "../logger.js";
-import { fetchAccounts, fetchContacts } from "../sources/vibe.js";
+import { fetchAccounts, fetchContacts, enrichFirmographics } from "../sources/vibe.js";
 import { classifyAccount } from "../brain/classify.js";
 import { draftEmail, draftLinkedIn } from "../brain/draft.js";
 import { deliverEmail } from "../channels/gmail.js";
 import { queueLinkedIn } from "../channels/linkedin.js";
-import { appendLead } from "../channels/sheets.js";
+import { appendLead, appendCompany } from "../channels/sheets.js";
 import { store } from "../store/store.js";
 import { nextActionAt } from "./cadence.js";
 import type { OutreachRecord } from "../types.js";
@@ -31,7 +31,15 @@ export async function runOutreachPass(): Promise<void> {
       account.scenarioReason = reason;
       log.info("account.classified", { name: account.name, scenario });
 
+      // Qualify the company (locations, tier, revenue, employees).
+      const firmo = await enrichFirmographics(account.businessId);
+      account.numLocations = firmo.numLocations;
+      account.revenueRange = firmo.revenueRange;
+      account.employeeRange = firmo.employeeRange;
+      account.country = firmo.country;
+
       const contacts = await fetchContacts(account, scenario, config.CONTACTS_PER_ACCOUNT);
+      let leadsForAccount = 0;
 
       for (const contact of contacts) {
         if (known.has(contact.prospectId)) continue;
@@ -76,7 +84,11 @@ export async function runOutreachPass(): Promise<void> {
         await store.upsert(record);
         known.add(contact.prospectId);
         enrolled++;
+        leadsForAccount++;
       }
+
+      // One row per qualified company on the Companies tab.
+      await appendCompany({ account, scenario, scenarioReason: reason, leads: leadsForAccount });
     } catch (err) {
       log.error("account.failed", { name: account.name, error: String(err) });
     }

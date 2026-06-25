@@ -24,6 +24,7 @@ const schema = z.object({
   // the refresh token must be minted with the Sheets scope too, see README).
   SHEETS_SPREADSHEET_ID: z.string().default(""),
   SHEETS_TAB: z.string().default("Leads"),
+  SHEETS_COMPANIES_TAB: z.string().default("Companies"),
 
   // Optional: vision-based signage classifier (Scenario A/B/C from real store
   // photos). Needs a SerpAPI key for image search. If empty, Kathy falls back

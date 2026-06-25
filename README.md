@@ -126,6 +126,12 @@ Every lead Kathy works is appended as a row to a Google Sheet — your team's li
 
 The three **Status** columns start in their initial state (`Drafted` / `Queued` / `To call`) and are meant to be updated by reps as actions happen, so you can see progress at a glance — who's been emailed, added on LinkedIn, or called. The **LinkedIn Note / Follow-up** columns hold Kathy's pre-written copy so you can feed them into your third-party LinkedIn outreach tool.
 
+A second **Companies** tab logs one row per qualified account, with firmographics from enrichment:
+
+`Date · Company · Domain · Vertical · # Locations · Tier · Revenue · Employees · Scenario · Signage Reason · City · Region · Country · Leads Found`
+
+Tiers are derived from location count (Tier 1 = 1000+, Tier 2 = 250–999, Tier 3 = 100–249, Tier 4 = 50–99). Both tabs are created automatically if missing. The tab names are configurable via `SHEETS_TAB` and `SHEETS_COMPANIES_TAB`.
+
 Setup:
 1. Mint the refresh token with the `spreadsheets` scope included (see "Gmail refresh token" above — add both scopes in one Playground authorization).
 2. Create a Google Sheet owned by (or shared with edit access to) `kathy@yellowpop.com`.

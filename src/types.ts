@@ -18,6 +18,11 @@ export interface Account {
   numLocationsBucket?: string;
   scenario?: Scenario;
   scenarioReason?: string;
+  // Firmographics (from enrichment) used to qualify the company.
+  numLocations?: number;
+  revenueRange?: string;
+  employeeRange?: string;
+  country?: string;
 }
 
 export interface Contact {

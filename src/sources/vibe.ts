@@ -20,6 +20,7 @@ const PATHS = {
   businesses: "/businesses",
   prospects: "/prospects",
   enrichContacts: "/prospects/contacts_information/enrich",
+  firmographics: "/businesses/firmographics/enrich",
 };
 
 // ---- ICP business filters (from the playbook) -------------------------------
@@ -217,6 +218,69 @@ function firstValue(arr?: Array<Record<string, string>>): string | undefined {
   if (!first) return undefined;
   const vals = Object.values(first);
   return vals.length ? vals[0] : undefined;
+}
+
+// ---- Firmographics enrichment (company qualification) -----------------------
+
+export interface Firmographics {
+  numLocations?: number;
+  revenueRange?: string;
+  employeeRange?: string;
+  country?: string;
+}
+
+interface RawFirmographics {
+  locations_distribution?: Array<Record<string, unknown>>;
+  yearly_revenue_range?: unknown;
+  number_of_employees_range?: unknown;
+  country_name?: string;
+}
+
+function sumLocations(arr?: Array<Record<string, unknown>>): number | undefined {
+  if (!arr?.length) return undefined;
+  let total = 0;
+  let found = false;
+  for (const entry of arr) {
+    for (const v of Object.values(entry)) {
+      if (typeof v === "number") {
+        total += v;
+        found = true;
+      }
+    }
+  }
+  return found ? total : undefined;
+}
+
+function rangeStr(v: unknown): string | undefined {
+  if (typeof v === "string") return v;
+  if (v && typeof v === "object") {
+    const s = Object.values(v as Record<string, unknown>).find((x) => typeof x === "string");
+    return (s as string | undefined) ?? undefined;
+  }
+  return undefined;
+}
+
+/** Enrich a company with firmographics: number of locations, revenue, employees. */
+export async function enrichFirmographics(businessId: string): Promise<Firmographics> {
+  if (config.DRY_RUN) {
+    return { numLocations: 240, revenueRange: "200M-500M", employeeRange: "1001-5000", country: "United States" };
+  }
+  try {
+    const r = await post<{ data: RawFirmographics | RawFirmographics[] }>(PATHS.firmographics, {
+      business_id: businessId,
+    });
+    const d = Array.isArray(r.data) ? r.data[0] : r.data;
+    if (!d) return {};
+    return {
+      numLocations: sumLocations(d.locations_distribution),
+      revenueRange: rangeStr(d.yearly_revenue_range),
+      employeeRange: rangeStr(d.number_of_employees_range),
+      country: d.country_name,
+    };
+  } catch (err) {
+    log.warn("firmographics.failed", { businessId, error: String(err) });
+    return {};
+  }
 }
 
 // ---- DRY_RUN fixtures (run the loop with no API key / credits) --------------

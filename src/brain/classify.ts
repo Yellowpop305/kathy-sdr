@@ -39,6 +39,10 @@ export async function classifyAccount(account: Account): Promise<ClassifyResult>
 
 /** Description-only fallback classifier. */
 async function classifyFromDescription(account: Account): Promise<ClassifyResult> {
+  log.info("classify.fallback", {
+    company: account.name,
+    reason: config.SERPAPI_KEY ? "no usable store photos" : "SERPAPI_KEY not set",
+  });
   const system = `You classify retail/hospitality brands by their in-store signage maturity for an LED neon sign vendor.
 Return ONLY JSON: {"scenario":"A"|"B"|"C","reason":"<one sentence>"}.
 - A = no neon or LED signage evident (default when unsure)

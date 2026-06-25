@@ -6,18 +6,15 @@ import type { Account, Contact, Draft, Scenario } from "../types.js";
 import { SCENARIO_LABELS } from "../types.js";
 
 /**
- * Google Sheet lead tracker — the team's live source of truth.
+ * Google Sheet tracker — two tabs:
+ *   - "Leads"     : one row per person Kathy works (the outreach tracker).
+ *   - "Companies" : one row per qualified account (locations, tier, scenario).
  *
- * One row per lead. Status columns (Email / LinkedIn / Call) start in their
- * initial state and are meant to be updated by reps (or by a future status
- * sync) as actions happen. The LinkedIn Note + Follow-up columns are written
- * so they can feed your third-party LinkedIn outreach tool.
- *
- * Auth reuses the SAME Google OAuth client as Gmail. The refresh token must be
- * minted with BOTH scopes: gmail.compose AND spreadsheets (see README).
+ * Auth reuses the same Google OAuth client as Gmail; the refresh token must be
+ * minted with the spreadsheets scope. Missing tabs are created automatically.
  */
 
-const HEADER = [
+const LEADS_HEADER = [
   "Date Added",
   "Full Name",
   "Title",
@@ -35,36 +32,79 @@ const HEADER = [
   "LinkedIn Follow-up",
 ];
 
-let headerEnsured = false;
+const COMPANIES_HEADER = [
+  "Date Added",
+  "Company",
+  "Domain",
+  "Vertical",
+  "# Locations",
+  "Tier",
+  "Revenue",
+  "Employees",
+  "Scenario",
+  "Signage Reason",
+  "City",
+  "Region",
+  "Country",
+  "Leads Found",
+];
+
+const ensuredTabs = new Set<string>();
 
 function client(): sheets_v4.Sheets {
-  const oauth2 = new google.auth.OAuth2(
-    config.GMAIL_CLIENT_ID,
-    config.GMAIL_CLIENT_SECRET,
-  );
+  const oauth2 = new google.auth.OAuth2(config.GMAIL_CLIENT_ID, config.GMAIL_CLIENT_SECRET);
   oauth2.setCredentials({ refresh_token: config.GMAIL_REFRESH_TOKEN });
   return google.sheets({ version: "v4", auth: oauth2 });
 }
 
-async function ensureHeader(sheets: sheets_v4.Sheets): Promise<void> {
-  if (headerEnsured) return;
-  const tab = config.SHEETS_TAB;
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: config.SHEETS_SPREADSHEET_ID,
-    range: `${tab}!A1:O1`,
+/** Make sure a tab exists (create if missing) and has its header row. */
+async function ensureTab(
+  sheets: sheets_v4.Sheets,
+  tab: string,
+  header: string[],
+): Promise<void> {
+  if (ensuredTabs.has(tab)) return;
+  const spreadsheetId = config.SHEETS_SPREADSHEET_ID;
+
+  const meta = await sheets.spreadsheets.get({
+    spreadsheetId,
+    fields: "sheets.properties.title",
   });
-  const hasHeader = (res.data.values?.[0]?.length ?? 0) > 0;
-  if (!hasHeader) {
+  const titles = (meta.data.sheets ?? []).map((s) => s.properties?.title);
+  if (!titles.includes(tab)) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: { requests: [{ addSheet: { properties: { title: tab } } }] },
+    });
+    log.info("sheets.tabCreated", { tab });
+  }
+
+  const res = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${tab}!1:1` });
+  if (((res.data.values?.[0]?.length ?? 0) as number) === 0) {
     await sheets.spreadsheets.values.update({
-      spreadsheetId: config.SHEETS_SPREADSHEET_ID,
+      spreadsheetId,
       range: `${tab}!A1`,
       valueInputOption: "RAW",
-      requestBody: { values: [HEADER] },
+      requestBody: { values: [header] },
     });
     log.info("sheets.headerWritten", { tab });
   }
-  headerEnsured = true;
+  ensuredTabs.add(tab);
 }
+
+async function appendRow(tab: string, header: string[], row: (string | number)[]): Promise<void> {
+  const sheets = client();
+  await ensureTab(sheets, tab, header);
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: config.SHEETS_SPREADSHEET_ID,
+    range: `${tab}!A1`,
+    valueInputOption: "USER_ENTERED",
+    insertDataOption: "INSERT_ROWS",
+    requestBody: { values: [row] },
+  });
+}
+
+// ---- Leads tab --------------------------------------------------------------
 
 export interface LeadRowInput {
   account: Account;
@@ -81,7 +121,6 @@ function splitLinkedIn(draft?: Draft): { note: string; followUp: string } {
   return { note: (note ?? draft.body).trim(), followUp: (followUp ?? "").trim() };
 }
 
-/** Append one lead to the tracker. No-op (logged) in DRY_RUN or if no sheet configured. */
 export async function appendLead(input: LeadRowInput): Promise<void> {
   if (!config.SHEETS_SPREADSHEET_ID) {
     log.warn("sheets.skip", { reason: "SHEETS_SPREADSHEET_ID not set" });
@@ -109,18 +148,55 @@ export async function appendLead(input: LeadRowInput): Promise<void> {
   ];
 
   if (config.DRY_RUN) {
-    log.info("sheets.dryRun", { name: contact.fullName, company: account.name });
+    log.info("sheets.dryRun", { tab: config.SHEETS_TAB, name: contact.fullName });
     return;
   }
+  await appendRow(config.SHEETS_TAB, LEADS_HEADER, row);
+  log.info("sheets.appended", { tab: config.SHEETS_TAB, name: contact.fullName });
+}
 
-  const sheets = client();
-  await ensureHeader(sheets);
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: config.SHEETS_SPREADSHEET_ID,
-    range: `${config.SHEETS_TAB}!A1`,
-    valueInputOption: "USER_ENTERED",
-    insertDataOption: "INSERT_ROWS",
-    requestBody: { values: [row] },
-  });
-  log.info("sheets.appended", { name: contact.fullName, company: account.name });
+// ---- Companies tab ----------------------------------------------------------
+
+export interface CompanyRowInput {
+  account: Account;
+  scenario: Scenario;
+  scenarioReason?: string;
+  leads: number;
+}
+
+function tierFor(n?: number): string {
+  if (n == null) return "Unknown";
+  if (n >= 1000) return "Tier 1 (1000+)";
+  if (n >= 250) return "Tier 2 (250–999)";
+  if (n >= 100) return "Tier 3 (100–249)";
+  return "Tier 4 (50–99)";
+}
+
+export async function appendCompany(input: CompanyRowInput): Promise<void> {
+  if (!config.SHEETS_SPREADSHEET_ID) return;
+  const { account, scenario, scenarioReason, leads } = input;
+
+  const row = [
+    new Date().toISOString().slice(0, 10),
+    account.name,
+    account.domain,
+    account.vertical ?? "",
+    account.numLocations ?? "",
+    tierFor(account.numLocations),
+    account.revenueRange ?? "",
+    account.employeeRange ?? "",
+    `${scenario} — ${SCENARIO_LABELS[scenario]}`,
+    scenarioReason ?? "",
+    account.city ?? "",
+    account.region ?? "",
+    account.country ?? "",
+    leads,
+  ];
+
+  if (config.DRY_RUN) {
+    log.info("sheets.dryRun", { tab: config.SHEETS_COMPANIES_TAB, company: account.name });
+    return;
+  }
+  await appendRow(config.SHEETS_COMPANIES_TAB, COMPANIES_HEADER, row);
+  log.info("sheets.companyAppended", { company: account.name, tier: tierFor(account.numLocations) });
 }
