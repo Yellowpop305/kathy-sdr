@@ -20,25 +20,41 @@ export async function runOutreachPass(): Promise<void> {
   const startedAt = Date.now();
   log.info("run.start", { accountsPerRun: config.ACCOUNTS_PER_RUN });
 
-  const accounts = await fetchAccounts(config.ACCOUNTS_PER_RUN);
   const known = await store.knownContactIds();
+  const doneAccounts = await store.knownBusinessIds();
+  // Fresh accounts only — never re-pay to reprocess ones we've already worked.
+  const accounts = await fetchAccounts(config.ACCOUNTS_PER_RUN, [...doneAccounts]);
   let enrolled = 0;
+  let enrichBudget = config.MAX_ENRICH_PER_RUN; // hard ceiling on paid enrichments
 
   for (const account of accounts) {
+    if (enrichBudget <= 0) {
+      log.info("run.budgetReached", { cap: config.MAX_ENRICH_PER_RUN });
+      break;
+    }
     try {
       const { scenario, reason } = await classifyAccount(account);
       account.scenario = scenario;
       account.scenarioReason = reason;
       log.info("account.classified", { name: account.name, scenario });
 
-      // Qualify the company (locations, tier, revenue, employees).
-      const firmo = await enrichFirmographics(account.businessId);
-      account.numLocations = firmo.numLocations;
-      account.revenueRange = firmo.revenueRange;
-      account.employeeRange = firmo.employeeRange;
-      account.country = firmo.country;
+      // Qualify the company (locations, tier, revenue) — opt-in, costs credits.
+      if (config.ENRICH_FIRMOGRAPHICS) {
+        const firmo = await enrichFirmographics(account.businessId);
+        account.numLocations = firmo.numLocations;
+        account.revenueRange = firmo.revenueRange;
+        account.employeeRange = firmo.employeeRange;
+        account.country = firmo.country;
+      }
 
-      const contacts = await fetchContacts(account, scenario, config.CONTACTS_PER_ACCOUNT);
+      const contacts = await fetchContacts(
+        account,
+        scenario,
+        config.CONTACTS_PER_ACCOUNT,
+        known,
+        enrichBudget,
+      );
+      enrichBudget -= contacts.length; // each returned contact consumed one enrichment
       let leadsForAccount = 0;
 
       for (const contact of contacts) {

@@ -34,8 +34,23 @@ const schema = z.object({
 
   // Behavior
   RUN_CRON: z.string().default("0 13 * * 1-5"), // 13:00 UTC, weekdays
-  ACCOUNTS_PER_RUN: z.coerce.number().int().positive().default(25),
-  CONTACTS_PER_ACCOUNT: z.coerce.number().int().positive().default(5),
+  ACCOUNTS_PER_RUN: z.coerce.number().int().positive().default(10),
+  CONTACTS_PER_ACCOUNT: z.coerce.number().int().positive().default(3),
+
+  // ---- Cost controls (credits) ----
+  // Hard ceiling on paid contact enrichments per run — a safety brake.
+  MAX_ENRICH_PER_RUN: z.coerce.number().int().positive().default(20),
+  // Phone enrichment is ~5 credits/contact (email ~2) with low coverage — off by default.
+  ENRICH_PHONE: z
+    .string()
+    .optional()
+    .transform((v) => v === "true" || v === "1"),
+  // Firmographics (Companies tab locations/tier) is cheap (~1 credit/account) —
+  // on by default; set to "false" to disable.
+  ENRICH_FIRMOGRAPHICS: z
+    .string()
+    .optional()
+    .transform((v) => v !== "false" && v !== "0"),
   AUTO_SEND: z
     .enum(["draft_only", "send"])
     .default("draft_only"), // draft_only = human approves in Gmail before send

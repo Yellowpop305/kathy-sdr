@@ -67,8 +67,11 @@ All config is environment variables, validated at boot (see `src/config.ts`).
 | `SERPAPI_KEY` | no | Enables the vision signage classifier (store-photo search). Empty = description-based fallback. |
 | `SIGNAGE_IMAGES` | no | Store photos to analyze per account. Default 4. |
 | `RUN_CRON` | no | UTC cron. Default `0 13 * * 1-5` (13:00 UTC weekdays). |
-| `ACCOUNTS_PER_RUN` | no | Default 25. |
-| `CONTACTS_PER_ACCOUNT` | no | Default 2. |
+| `ACCOUNTS_PER_RUN` | no | Default 10. |
+| `CONTACTS_PER_ACCOUNT` | no | Default 3. |
+| `MAX_ENRICH_PER_RUN` | no | Hard cap on paid contact enrichments per run. Default 20. |
+| `ENRICH_PHONE` | no | `true` to also enrich phone (~5 credits vs ~2 email). Default off. |
+| `ENRICH_FIRMOGRAPHICS` | no | Companies-tab locations/tier (~1 credit/account). Default on; set `false` to disable. |
 | `AUTO_SEND` | no | `draft_only` (default, recommended) or `send`. |
 | `DATA_DIR` | no | Default `./data`. |
 | `DRY_RUN` | no | `true` to run with fixtures, no external calls. |
@@ -141,6 +144,19 @@ Setup:
 Leave `SHEETS_SPREADSHEET_ID` empty to disable the tracker (she'll just log and skip it).
 
 Phone numbers come from Explorium contact enrichment. Coverage varies — direct dials for senior people at large brands are often missing — so expect the Phone column to be partially filled.
+
+## Cost controls (Explorium credits)
+
+Explorium credits are the main running cost, and contact enrichment + prospect fetch dominate. Kathy is built to avoid wasted spend:
+
+- **No repeat work.** Accounts already processed are excluded from future fetches (`store.knownBusinessIds()` → `exclude`), and known prospects are filtered out *before* the paid enrichment call — so re-runs don't re-pay for the same people.
+- **Email-only by default.** Phone enrichment (~5 credits) is opt-in via `ENRICH_PHONE`; email (~2 credits) is the default.
+- **Firmographics is cheap** (~1 credit/account) and on by default; set `ENRICH_FIRMOGRAPHICS=false` to skip it.
+- **Small candidate pool.** Each prospect fetch costs credits, so the pool is kept lean (12) and narrowed by the relevance judge.
+- **Hard per-run cap.** `MAX_ENRICH_PER_RUN` is an absolute ceiling on paid enrichments in a single run — a run can't blow the budget.
+- **Run cadence matters.** `RUN_CRON` should be daily/weekly (`0 13 * * 1-5`), never `*/5` — every-5-minutes means ~288 runs/day, each spending credits.
+
+Rough cost per run ≈ (accounts × fetch) + (enriched contacts × ~2 email). Keep `ACCOUNTS_PER_RUN`, `CONTACTS_PER_ACCOUNT`, and `MAX_ENRICH_PER_RUN` modest until you've watched real consumption.
 
 ## Signage classification (Scenario A/B/C)
 

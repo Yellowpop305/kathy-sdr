@@ -51,8 +51,8 @@ export const ICP_BUSINESS_FILTERS = {
 const PROSPECT_COUNTRIES = ["US", "CA"];
 
 // How many candidates to pull per account before the relevance judge narrows
-// them down to the ones we actually contact.
-const CANDIDATE_POOL = 30;
+// them down. Kept small because each prospect fetch costs credits.
+const CANDIDATE_POOL = 12;
 
 async function post<T>(p: string, body: unknown): Promise<T> {
   const res = await request(`${config.EXPLORIUM_BASE_URL}${p}`, {
@@ -110,8 +110,9 @@ interface EnrichData {
 const pick = <T>(...vals: (T | undefined)[]): T | undefined =>
   vals.find((v) => v !== undefined && v !== null && v !== "");
 
-/** Fetch qualifying accounts: 50+ US locations in target verticals. */
-export async function fetchAccounts(limit: number): Promise<Account[]> {
+/** Fetch qualifying accounts: 50+ US/Canada locations in target verticals.
+ *  `exclude` = business IDs already processed, so each run gets fresh accounts. */
+export async function fetchAccounts(limit: number, exclude: string[] = []): Promise<Account[]> {
   if (config.DRY_RUN) return DRY_ACCOUNTS.slice(0, limit);
   const data = await post<{ data: RawBusiness[] }>(PATHS.businesses, {
     mode: "full",
@@ -119,6 +120,7 @@ export async function fetchAccounts(limit: number): Promise<Account[]> {
     page_size: Math.min(limit, 100),
     page: 1,
     filters: ICP_BUSINESS_FILTERS,
+    ...(exclude.length ? { exclude } : {}),
     request_context: {},
   });
   return (data.data ?? []).map((b) => ({
@@ -132,12 +134,19 @@ export async function fetchAccounts(limit: number): Promise<Account[]> {
   }));
 }
 
-/** Fetch decision-makers for an account and enrich each with email + phone. */
+/**
+ * Fetch decision-makers for an account and enrich them.
+ * - `skip`: prospect IDs already processed (never re-enriched → saves credits).
+ * - `budget`: max paid enrichments allowed for this account (cost ceiling).
+ */
 export async function fetchContacts(
   account: Account,
   _scenario: string,
   perAccount: number,
+  skip: Set<string> = new Set(),
+  budget = Number.MAX_SAFE_INTEGER,
 ): Promise<Contact[]> {
+  if (budget <= 0) return [];
   if (config.DRY_RUN) return DRY_CONTACTS(account).slice(0, perAccount);
 
   // Pull a BROAD pool spanning the persona (seed titles + semantic expansion),
@@ -174,15 +183,23 @@ export async function fetchContacts(
   );
   const icpById = new Map(selections.map((s) => [s.prospectId, s.icp]));
   const byId = new Map(pool.map((p) => [p.prospect_id, p]));
-  const prospects = selections
+  const ranked = selections
     .map((s) => byId.get(s.prospectId))
     .filter((p): p is RawProspect => p !== undefined);
+
+  // Skip prospects we've already processed (never pay to re-enrich) and cap to
+  // both perAccount and the remaining run budget.
+  const prospects = ranked
+    .filter((p) => !skip.has(p.prospect_id))
+    .slice(0, Math.min(perAccount, budget));
   log.info("prospects.selected", {
     company: account.name,
     pool: pool.length,
-    kept: prospects.length,
+    eligible: ranked.length,
+    enriching: prospects.length,
   });
 
+  const contactTypes = config.ENRICH_PHONE ? ["email", "phone"] : ["email"];
   const contacts: Contact[] = [];
   for (const p of prospects) {
     const c: Contact = {
@@ -197,7 +214,7 @@ export async function fetchContacts(
     try {
       const enriched = await post<{ data: EnrichData | EnrichData[] }>(PATHS.enrichContacts, {
         prospect_id: p.prospect_id,
-        parameters: { contact_types: ["email", "phone"] },
+        parameters: { contact_types: contactTypes },
       });
       const d = Array.isArray(enriched.data) ? enriched.data[0] : enriched.data;
       if (d) {

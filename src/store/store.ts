@@ -47,6 +47,12 @@ export const store = {
     return new Set(records.map((r) => r.contact.prospectId));
   },
 
+  /** Account IDs we've already worked — excluded from future account fetches. */
+  async knownBusinessIds(): Promise<Set<string>> {
+    const records = await readAll();
+    return new Set(records.map((r) => r.account.businessId));
+  },
+
   async upsert(record: OutreachRecord): Promise<void> {
     const records = await readAll();
     const idx = records.findIndex((r) => r.id === record.id);
