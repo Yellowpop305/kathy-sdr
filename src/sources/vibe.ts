@@ -24,7 +24,7 @@ const PATHS = {
 // NOTE: the businesses endpoint uses `country_code` (lowercase alpha-2) for HQ.
 
 export const ICP_BUSINESS_FILTERS = {
-  country_code: { values: ["us"] },
+  country_code: { values: ["us", "ca"] },
   number_of_locations: { values: ["51-100", "101-1000", "1001+"] },
   linkedin_category: {
     values: [
@@ -44,9 +44,25 @@ export const ICP_BUSINESS_FILTERS = {
   },
 } as const;
 
-// Seniority targeted per scenario. Department-level targeting can be layered on
-// later via `job_department` once we confirm the taxonomy via autocomplete.
-const DECISION_MAKER_LEVELS = ["director", "vp", "c-suite", "manager"];
+// The roles relevant to Yellowpop (not C-suite). `expand_job_titles` also
+// pulls in semantically-related titles, so this list stays high-coverage
+// without dragging in Presidents/CEOs.
+const TARGET_TITLES = [
+  "Brand Manager",
+  "VP of Brand",
+  "VP of Marketing",
+  "Marketing Manager",
+  "Customer Experience Manager",
+  "Retail Experience Manager",
+  "Store Designer",
+  "Retail Designer",
+  "Visual Merchandising Manager",
+  "Procurement Manager",
+  "Construction Manager",
+];
+
+// Prospects must be physically located in the US or Canada.
+const PROSPECT_COUNTRIES = ["US", "CA"];
 
 async function post<T>(p: string, body: unknown): Promise<T> {
   const res = await request(`${config.EXPLORIUM_BASE_URL}${p}`, {
@@ -133,37 +149,28 @@ export async function fetchContacts(
 ): Promise<Contact[]> {
   if (config.DRY_RUN) return DRY_CONTACTS(account).slice(0, perAccount);
 
-  const baseFilters = {
+  // Target the roles relevant to Yellowpop, located in the US/Canada, with an
+  // email on file. Title-based (not seniority) so we skip Presidents/CEOs.
+  const filters = {
     business_id: { values: [account.businessId] },
     has_email: { value: true },
+    country_code: { values: PROSPECT_COUNTRIES }, // prospect's own location
+    job_title: { values: TARGET_TITLES, expand_job_titles: true },
   };
 
-  // Try targeted (senior decision-makers); if the filter 422s or returns
-  // nothing, fall back to any contacts-with-email at the account.
   let prospects: RawProspect[] = [];
   try {
-    const targeted = await post<{ data: RawProspect[] }>(PATHS.prospects, {
+    const res = await post<{ data: RawProspect[] }>(PATHS.prospects, {
       mode: "full",
       size: perAccount,
       page_size: perAccount,
       page: 1,
-      filters: { ...baseFilters, job_level: { values: DECISION_MAKER_LEVELS } },
+      filters,
       request_context: {},
     });
-    prospects = targeted.data ?? [];
+    prospects = res.data ?? [];
   } catch (err) {
-    log.warn("prospects.targetedFailed", { company: account.name, error: String(err) });
-  }
-  if (prospects.length === 0) {
-    const any = await post<{ data: RawProspect[] }>(PATHS.prospects, {
-      mode: "full",
-      size: perAccount,
-      page_size: perAccount,
-      page: 1,
-      filters: baseFilters,
-      request_context: {},
-    });
-    prospects = any.data ?? [];
+    log.warn("prospects.fetchFailed", { company: account.name, error: String(err) });
   }
 
   const contacts: Contact[] = [];
