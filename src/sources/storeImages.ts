@@ -28,10 +28,23 @@ export async function findStoreImages(account: Account, max: number): Promise<st
       return [];
     }
     const data = (await res.body.json()) as {
-      images_results?: Array<{ original?: string; thumbnail?: string }>;
+      images_results?: Array<{
+        original?: string;
+        thumbnail?: string;
+        original_width?: number;
+        original_height?: number;
+      }>;
     };
+    // Prefer a reasonably-sized original; fall back to the (small, safe)
+    // thumbnail when the original is huge — Claude's vision API rejects very
+    // large images with a 400.
     const urls = (data.images_results ?? [])
-      .map((r) => r.original ?? r.thumbnail)
+      .map((r) => {
+        const w = r.original_width ?? 0;
+        const h = r.original_height ?? 0;
+        const originalOk = r.original && w > 0 && h > 0 && w <= 2400 && h <= 2400;
+        return originalOk ? r.original : r.thumbnail;
+      })
       .filter((u): u is string => typeof u === "string" && u.startsWith("http"))
       .slice(0, max);
     log.debug("storeImages.found", { company: account.name, count: urls.length });

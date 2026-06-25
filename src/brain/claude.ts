@@ -79,7 +79,7 @@ async function fetchImageBlock(url: string): Promise<ImageBlock | null> {
     const media = String(res.headers["content-type"] ?? "").split(";")[0]!.trim();
     if (!IMG_TYPES.includes(media as ImgMedia)) return null;
     const buf = Buffer.from(await res.body.arrayBuffer());
-    if (buf.length === 0 || buf.length > 4_500_000) return null; // ~4.5MB cap
+    if (buf.length === 0 || buf.length > 3_000_000) return null; // ~3MB cap
     return {
       type: "image",
       source: { type: "base64", media_type: media as ImgMedia, data: buf.toString("base64") },
@@ -101,18 +101,33 @@ export async function completeVisionJson<T>(opts: {
   );
   if (blocks.length === 0) throw new Error("no usable images");
 
-  const content: (TextBlock | ImageBlock)[] = [{ type: "text", text: opts.text }, ...blocks];
-  const res = await anthropic.messages.create({
-    model: config.ANTHROPIC_MODEL,
-    max_tokens: opts.maxTokens ?? 512,
-    system: opts.system,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    messages: [{ role: "user", content: content as any }],
-  });
-  log.debug("vision.done", { images: blocks.length });
-  const raw = res.content
-    .map((b) => (b.type === "text" ? b.text : ""))
-    .join("\n")
-    .trim();
-  return parseJson<T>(raw);
+  // Try with all images; if the API rejects the request (e.g. an oversized
+  // image → 400), retry with progressively fewer images before giving up.
+  const counts = [...new Set([blocks.length, 2, 1])].filter((n) => n > 0);
+  let lastErr: unknown;
+  for (const count of counts) {
+    const content: (TextBlock | ImageBlock)[] = [
+      { type: "text", text: opts.text },
+      ...blocks.slice(0, count),
+    ];
+    try {
+      const res = await anthropic.messages.create({
+        model: config.ANTHROPIC_MODEL,
+        max_tokens: opts.maxTokens ?? 512,
+        system: opts.system,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        messages: [{ role: "user", content: content as any }],
+      });
+      log.debug("vision.done", { images: count });
+      const raw = res.content
+        .map((b) => (b.type === "text" ? b.text : ""))
+        .join("\n")
+        .trim();
+      return parseJson<T>(raw);
+    } catch (err) {
+      lastErr = err;
+      log.warn("vision.retry", { images: count, error: String(err).slice(0, 160) });
+    }
+  }
+  throw lastErr;
 }
