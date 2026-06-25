@@ -96,6 +96,7 @@ interface RawProspect {
   title?: string;
   company_name?: string;
   linkedin?: string;
+  linkedin_url_array?: string[];
 }
 
 interface EnrichData {
@@ -146,7 +147,7 @@ export async function fetchContacts(
     business_id: { values: [account.businessId] },
     has_email: { value: true },
     country_code: { values: PROSPECT_COUNTRIES }, // prospect's own location
-    job_title: { values: PERSONA_TITLE_SEED, expand_job_titles: true },
+    job_title: { values: PERSONA_TITLE_SEED, include_related_job_titles: true },
   };
 
   let pool: RawProspect[] = [];
@@ -189,7 +190,7 @@ export async function fetchContacts(
       fullName: pick(p.full_name, [p.first_name, p.last_name].filter(Boolean).join(" ")) ?? "there",
       firstName: pick(p.first_name, p.full_name?.split(" ")[0]) ?? "there",
       title: pick(p.job_title, p.title) ?? "",
-      linkedinUrl: p.linkedin,
+      linkedinUrl: pick(p.linkedin, p.linkedin_url_array?.[0]),
       icp: icpById.get(p.prospect_id),
     };
     try {
