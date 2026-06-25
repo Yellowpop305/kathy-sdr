@@ -25,6 +25,12 @@ const schema = z.object({
   SHEETS_SPREADSHEET_ID: z.string().default(""),
   SHEETS_TAB: z.string().default("Leads"),
 
+  // Optional: vision-based signage classifier (Scenario A/B/C from real store
+  // photos). Needs a SerpAPI key for image search. If empty, Kathy falls back
+  // to a description-based guess.
+  SERPAPI_KEY: z.string().default(""),
+  SIGNAGE_IMAGES: z.coerce.number().int().positive().default(4),
+
   // Behavior
   RUN_CRON: z.string().default("0 13 * * 1-5"), // 13:00 UTC, weekdays
   ACCOUNTS_PER_RUN: z.coerce.number().int().positive().default(25),

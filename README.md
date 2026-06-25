@@ -64,6 +64,8 @@ All config is environment variables, validated at boot (see `src/config.ts`).
 | `GMAIL_SENDER` | no | From address. Defaults to `kathy@yellowpop.com`. |
 | `SHEETS_SPREADSHEET_ID` | no | Google Sheet lead tracker ID. Empty = skip the sheet. |
 | `SHEETS_TAB` | no | Tab name. Default `Leads`. |
+| `SERPAPI_KEY` | no | Enables the vision signage classifier (store-photo search). Empty = description-based fallback. |
+| `SIGNAGE_IMAGES` | no | Store photos to analyze per account. Default 4. |
 | `RUN_CRON` | no | UTC cron. Default `0 13 * * 1-5` (13:00 UTC weekdays). |
 | `ACCOUNTS_PER_RUN` | no | Default 25. |
 | `CONTACTS_PER_ACCOUNT` | no | Default 2. |
@@ -134,9 +136,14 @@ Leave `SHEETS_SPREADSHEET_ID` empty to disable the tracker (she'll just log and 
 
 Phone numbers come from Explorium contact enrichment. Coverage varies — direct dials for senior people at large brands are often missing — so expect the Phone column to be partially filled.
 
-## Improving classification
+## Signage classification (Scenario A/B/C)
 
-Out of the box, Scenario A/B/C is inferred from the firmographic description (and defaults to A when evidence is thin). To sharpen it, feed real signage signals into `classifyAccount` — e.g. scrape the brand's store photos (website, Google/Yelp images, Instagram) or website keywords and pass them in the prompt. This is where a scraping step (ScrapeGraphAI or similar) would genuinely add value on top of Vibe.
+Kathy decides each account's signage maturity in two tiers:
+
+1. **Vision (preferred)** — with a `SERPAPI_KEY` set, she searches for real store photos of the brand (`src/sources/storeImages.ts`) and has Claude *look at them* to judge whether the stores show LED neon (C), traditional glass neon (B), or none (A) — `src/brain/signage.ts`. The reason logged/written cites what was actually seen.
+2. **Description fallback** — without a key (or if no usable photos are found), she falls back to a guess from the firmographic description, defaulting to A.
+
+Tune `SIGNAGE_IMAGES` for how many photos to analyze per account (more = more accurate but more vision tokens). To swap image providers (Bing, Google CSE, a dedicated scraper), reimplement the single `findStoreImages` function — nothing else depends on it.
 
 ---
 

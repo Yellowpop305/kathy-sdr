@@ -1,4 +1,8 @@
 import { completeJson } from "./claude.js";
+import { config } from "../config.js";
+import { log } from "../logger.js";
+import { findStoreImages } from "../sources/storeImages.js";
+import { classifySignageFromImages } from "./signage.js";
 import type { Account, Scenario } from "../types.js";
 
 interface ClassifyResult {
@@ -9,11 +13,32 @@ interface ClassifyResult {
 /**
  * Classify an account's signage maturity into Scenario A / B / C.
  *
- * This uses only the firmographic description available from the data source.
- * For higher accuracy, feed in scraped store-photo / website signals (see
- * README → "Improving classification"). When evidence is thin, default to A.
+ * Primary: look at real store photos (SerpAPI image search → Claude vision).
+ * Fallback: a description-based guess when no images/key are available.
  */
 export async function classifyAccount(account: Account): Promise<ClassifyResult> {
+  // Vision-first: judge from actual store photos when we can.
+  if (config.SERPAPI_KEY && !config.DRY_RUN) {
+    try {
+      const images = await findStoreImages(account, config.SIGNAGE_IMAGES);
+      const vision = await classifySignageFromImages(account, images);
+      if (vision) {
+        log.info("classify.vision", {
+          company: account.name,
+          scenario: vision.scenario,
+          images: images.length,
+        });
+        return vision;
+      }
+    } catch (err) {
+      log.warn("classify.visionError", { company: account.name, error: String(err) });
+    }
+  }
+  return classifyFromDescription(account);
+}
+
+/** Description-only fallback classifier. */
+async function classifyFromDescription(account: Account): Promise<ClassifyResult> {
   const system = `You classify retail/hospitality brands by their in-store signage maturity for an LED neon sign vendor.
 Return ONLY JSON: {"scenario":"A"|"B"|"C","reason":"<one sentence>"}.
 - A = no neon or LED signage evident (default when unsure)
