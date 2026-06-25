@@ -2,6 +2,8 @@ import { request } from "undici";
 import { config } from "../config.js";
 import { log } from "../logger.js";
 import type { Account, Contact } from "../types.js";
+import { PERSONA_TITLE_SEED } from "../brain/personas.js";
+import { selectRelevantProspects } from "../brain/relevance.js";
 
 /**
  * Explorium (Vibe Prospecting) data client — matched to the documented
@@ -44,25 +46,12 @@ export const ICP_BUSINESS_FILTERS = {
   },
 } as const;
 
-// The roles relevant to Yellowpop (not C-suite). `expand_job_titles` also
-// pulls in semantically-related titles, so this list stays high-coverage
-// without dragging in Presidents/CEOs.
-const TARGET_TITLES = [
-  "Brand Manager",
-  "VP of Brand",
-  "VP of Marketing",
-  "Marketing Manager",
-  "Customer Experience Manager",
-  "Retail Experience Manager",
-  "Store Designer",
-  "Retail Designer",
-  "Visual Merchandising Manager",
-  "Procurement Manager",
-  "Construction Manager",
-];
-
 // Prospects must be physically located in the US or Canada.
 const PROSPECT_COUNTRIES = ["US", "CA"];
+
+// How many candidates to pull per account before the relevance judge narrows
+// them down to the ones we actually contact.
+const CANDIDATE_POOL = 30;
 
 async function post<T>(p: string, body: unknown): Promise<T> {
   const res = await request(`${config.EXPLORIUM_BASE_URL}${p}`, {
@@ -149,32 +138,49 @@ export async function fetchContacts(
 ): Promise<Contact[]> {
   if (config.DRY_RUN) return DRY_CONTACTS(account).slice(0, perAccount);
 
-  // Target the roles relevant to Yellowpop, located in the US/Canada, with an
-  // email on file. Title-based (not seniority) so we skip Presidents/CEOs.
+  // Pull a BROAD pool spanning the persona (seed titles + semantic expansion),
+  // located in US/Canada, with an email on file. The relevance judge then
+  // reasons about each title and keeps only genuine fits — so we understand
+  // who to target rather than matching a rigid list.
   const filters = {
     business_id: { values: [account.businessId] },
     has_email: { value: true },
     country_code: { values: PROSPECT_COUNTRIES }, // prospect's own location
-    job_title: { values: TARGET_TITLES, expand_job_titles: true },
+    job_title: { values: PERSONA_TITLE_SEED, expand_job_titles: true },
   };
 
-  let prospects: RawProspect[] = [];
+  let pool: RawProspect[] = [];
   try {
     const res = await post<{ data: RawProspect[] }>(PATHS.prospects, {
       mode: "full",
-      size: perAccount,
-      page_size: perAccount,
+      size: CANDIDATE_POOL,
+      page_size: CANDIDATE_POOL,
       page: 1,
       filters,
       request_context: {},
     });
-    prospects = res.data ?? [];
+    pool = res.data ?? [];
   } catch (err) {
     log.warn("prospects.fetchFailed", { company: account.name, error: String(err) });
   }
 
+  // LLM relevance judge: pick the best-fitting prospects (excludes execs /
+  // irrelevant roles), ranked, capped at perAccount.
+  const keepIds = new Set(
+    await selectRelevantProspects(
+      pool.map((p) => ({ prospectId: p.prospect_id, title: pick(p.job_title, p.title) ?? "" })),
+      perAccount,
+    ),
+  );
+  const prospects = pool.filter((p) => keepIds.has(p.prospect_id)).slice(0, perAccount);
+  log.info("prospects.selected", {
+    company: account.name,
+    pool: pool.length,
+    kept: prospects.length,
+  });
+
   const contacts: Contact[] = [];
-  for (const p of prospects.slice(0, perAccount)) {
+  for (const p of prospects) {
     const c: Contact = {
       prospectId: p.prospect_id,
       businessId: account.businessId,
