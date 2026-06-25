@@ -61,8 +61,18 @@ export async function completeJson<T>(opts: {
 const IMG_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"] as const;
 type ImgMedia = (typeof IMG_TYPES)[number];
 
+// Local shapes (avoids depending on SDK-version-specific exported type names).
+interface ImageBlock {
+  type: "image";
+  source: { type: "base64"; media_type: ImgMedia; data: string };
+}
+interface TextBlock {
+  type: "text";
+  text: string;
+}
+
 /** Fetch an image URL and turn it into a base64 image block (null if unusable). */
-async function fetchImageBlock(url: string): Promise<Anthropic.ImageBlockParam | null> {
+async function fetchImageBlock(url: string): Promise<ImageBlock | null> {
   try {
     const res = await request(url, { method: "GET", maxRedirections: 3 });
     if (res.statusCode >= 400) return null;
@@ -87,16 +97,17 @@ export async function completeVisionJson<T>(opts: {
   maxTokens?: number;
 }): Promise<T> {
   const blocks = (await Promise.all(opts.imageUrls.map(fetchImageBlock))).filter(
-    (b): b is Anthropic.ImageBlockParam => b !== null,
+    (b): b is ImageBlock => b !== null,
   );
   if (blocks.length === 0) throw new Error("no usable images");
 
-  const content: Anthropic.ContentBlockParam[] = [{ type: "text", text: opts.text }, ...blocks];
+  const content: (TextBlock | ImageBlock)[] = [{ type: "text", text: opts.text }, ...blocks];
   const res = await anthropic.messages.create({
     model: config.ANTHROPIC_MODEL,
     max_tokens: opts.maxTokens ?? 512,
     system: opts.system,
-    messages: [{ role: "user", content }],
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    messages: [{ role: "user", content: content as any }],
   });
   log.debug("vision.done", { images: blocks.length });
   const raw = res.content
