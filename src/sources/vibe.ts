@@ -135,7 +135,7 @@ export async function fetchContacts(
 
   const baseFilters = {
     business_id: { values: [account.businessId] },
-    has_email: { values: [true] },
+    has_email: { value: true },
   };
 
   // Try targeted (senior decision-makers); if the filter 422s or returns
