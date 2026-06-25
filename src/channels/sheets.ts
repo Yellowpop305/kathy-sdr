@@ -22,6 +22,7 @@ const HEADER = [
   "Full Name",
   "Title",
   "Company",
+  "ICP",
   "Email",
   "LinkedIn URL",
   "Phone",
@@ -50,7 +51,7 @@ async function ensureHeader(sheets: sheets_v4.Sheets): Promise<void> {
   const tab = config.SHEETS_TAB;
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: config.SHEETS_SPREADSHEET_ID,
-    range: `${tab}!A1:N1`,
+    range: `${tab}!A1:O1`,
   });
   const hasHeader = (res.data.values?.[0]?.length ?? 0) > 0;
   if (!hasHeader) {
@@ -94,6 +95,7 @@ export async function appendLead(input: LeadRowInput): Promise<void> {
     contact.fullName,
     contact.title,
     account.name,
+    contact.icp ?? "",
     contact.email ?? "",
     contact.linkedinUrl ?? "",
     contact.phone ?? "",

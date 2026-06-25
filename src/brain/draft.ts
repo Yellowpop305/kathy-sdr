@@ -1,4 +1,5 @@
 import { complete, completeJson, systemPrompt } from "./claude.js";
+import { icpAngle } from "./personas.js";
 import type { Account, Contact, Draft, Scenario } from "../types.js";
 import { SCENARIO_LABELS } from "../types.js";
 
@@ -12,12 +13,15 @@ exactly one CTA (a 15-minute meeting); reference something specific and true abo
 warm and human, never templated; no "I hope this finds you well"; no feature dumps; sign as Kathy.`;
 
 function context(account: Account, contact: Contact, scenario: Scenario): string {
+  const angle = icpAngle(contact.icp);
   return `Brand: ${account.name} (${account.domain})
 Vertical: ${account.vertical ?? "multi-location brand"}
 Locations: ${account.numLocationsBucket ?? "50+"}
 City: ${account.city ?? "n/a"}
 Contact: ${contact.firstName} — ${contact.title}
-Scenario: ${scenario} (${SCENARIO_LABELS[scenario]})
+ICP: ${contact.icp ?? "Brand"}
+Angle to lead with for this ICP: ${angle}
+Signage scenario: ${scenario} (${SCENARIO_LABELS[scenario]})
 Brand notes: ${account.description ?? "n/a"}`;
 }
 

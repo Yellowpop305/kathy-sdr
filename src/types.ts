@@ -29,6 +29,8 @@ export interface Contact {
   email?: string;
   phone?: string;
   linkedinUrl?: string;
+  /** Which of the four ICPs this person belongs to (Brand / Retail / Store Design / Construction / Procurement). */
+  icp?: string;
 }
 
 export type Channel = "email" | "linkedin";

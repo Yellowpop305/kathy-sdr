@@ -165,14 +165,16 @@ export async function fetchContacts(
   }
 
   // LLM relevance judge: pick the best-fitting prospects (excludes execs /
-  // irrelevant roles), ranked, capped at perAccount.
-  const keepIds = new Set(
-    await selectRelevantProspects(
-      pool.map((p) => ({ prospectId: p.prospect_id, title: pick(p.job_title, p.title) ?? "" })),
-      perAccount,
-    ),
+  // irrelevant roles), classify each into an ICP, ranked, capped at perAccount.
+  const selections = await selectRelevantProspects(
+    pool.map((p) => ({ prospectId: p.prospect_id, title: pick(p.job_title, p.title) ?? "" })),
+    perAccount,
   );
-  const prospects = pool.filter((p) => keepIds.has(p.prospect_id)).slice(0, perAccount);
+  const icpById = new Map(selections.map((s) => [s.prospectId, s.icp]));
+  const byId = new Map(pool.map((p) => [p.prospect_id, p]));
+  const prospects = selections
+    .map((s) => byId.get(s.prospectId))
+    .filter((p): p is RawProspect => p !== undefined);
   log.info("prospects.selected", {
     company: account.name,
     pool: pool.length,
@@ -188,6 +190,7 @@ export async function fetchContacts(
       firstName: pick(p.first_name, p.full_name?.split(" ")[0]) ?? "there",
       title: pick(p.job_title, p.title) ?? "",
       linkedinUrl: p.linkedin,
+      icp: icpById.get(p.prospect_id),
     };
     try {
       const enriched = await post<{ data: EnrichData | EnrichData[] }>(PATHS.enrichContacts, {
@@ -252,6 +255,7 @@ function DRY_CONTACTS(account: Account): Contact[] {
       email: `jordan@${account.domain}`,
       phone: "+1-310-555-0142",
       linkedinUrl: "https://linkedin.com/in/example-jordan",
+      icp: "Brand",
     },
   ];
 }
