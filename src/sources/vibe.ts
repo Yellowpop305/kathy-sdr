@@ -237,6 +237,22 @@ function firstValue(arr?: Array<Record<string, string>>): string | undefined {
   return vals.length ? vals[0] : undefined;
 }
 
+/** On-demand phone enrichment for an engaged prospect (used by the webhook loop). */
+export async function enrichPhone(prospectId: string): Promise<string | undefined> {
+  if (config.DRY_RUN) return "+1-310-555-0199";
+  try {
+    const enriched = await post<{ data: EnrichData | EnrichData[] }>(PATHS.enrichContacts, {
+      prospect_id: prospectId,
+      parameters: { contact_types: ["phone"] },
+    });
+    const d = Array.isArray(enriched.data) ? enriched.data[0] : enriched.data;
+    return d ? pick(d.mobile_phone, firstValue(d.phone_numbers)) : undefined;
+  } catch (err) {
+    log.warn("enrichPhone.failed", { prospectId, error: String(err) });
+    return undefined;
+  }
+}
+
 // ---- Firmographics enrichment (company qualification) -----------------------
 
 export interface Firmographics {

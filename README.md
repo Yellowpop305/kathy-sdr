@@ -91,7 +91,7 @@ All config is environment variables, validated at boot (see `src/config.ts`).
 1. Push this repo to GitHub.
 2. Railway → **New Project → Deploy from GitHub repo**. It auto-detects the `Dockerfile` (config in `railway.json`).
 3. Add all env vars from `.env.example` in the Railway service **Variables** tab. Set `DRY_RUN=false`.
-4. The service runs as a worker and triggers itself on `RUN_CRON`. (No public port needed — it's not an HTTP server.)
+4. The service triggers itself on `RUN_CRON` **and** runs a small HTTP server (health check + Expandi webhook receiver). Railway assigns a `PORT` automatically and gives the service a public URL — you'll point Expandi's webhook at `https://<that-url>/webhooks/expandi`.
 5. **Persistence:** Railway's filesystem is ephemeral. Attach a **Volume** mounted at `/app/data` and set `DATA_DIR=/app/data`, **or** swap the store for Postgres (below). Without one of these, Kathy forgets who she's already contacted on each redeploy.
 
 To trigger a manual run instead of waiting for cron, run `node dist/index.js --once` (e.g. a Railway one-off command).
@@ -117,7 +117,16 @@ create table outreach (
 ## Channels & compliance
 
 - **Email** runs through Kathy's Gmail. Default `draft_only` keeps a human in the loop and protects deliverability. Use a dedicated outbound domain + warm-up before scaling volume or flipping to `send`.
-- **LinkedIn is deliberately not automated.** LinkedIn prohibits automated connections/messaging via unofficial APIs and will restrict accounts that do it. Kathy writes LinkedIn touches to `data/linkedin_queue.jsonl`; a person (or Kathy operating her own logged-in browser) sends them manually within safe daily limits (~15–25 connection requests/day on a warmed account).
+- **LinkedIn runs through Expandi.** LinkedIn has no compliant API for connections/messaging, so Kathy hands off to [Expandi](https://expandi.io) — she pushes each lead (profile URL + personalized note as custom variables) to your Expandi campaign's incoming webhook (`EXPANDI_ADD_LEAD_URL`), and Expandi sends the connection request + message sequence from your LinkedIn account. She also still writes `data/linkedin_queue.jsonl` as a backup feed. Keep within Expandi's safe ~300 requests/week per account (≈ 2 seats for 500/week). Account automation carries inherent risk — warm up and stay within limits.
+
+### Engagement loop (Expandi → Kathy)
+
+Point your Expandi campaign's **outbound** webhook at `https://<railway-url>/webhooks/expandi` (optionally `?secret=EXPANDI_WEBHOOK_SECRET`). When a lead **accepts the connection or replies**, Kathy:
+1. enriches their **phone** (deferred until now to save credits),
+2. updates the lead's row in the Leads tab (LinkedIn Status → Connected/Replied, Call Status → "Engaged — call", phone filled),
+3. emails an **alert** to `ALERT_EMAIL`.
+
+Matching back to the right lead relies on the `prospect_id` Kathy sends as an Expandi custom variable (and the hidden Prospect ID column in the Leads tab), so make sure your campaign passes it through to the outbound webhook.
 
 ---
 
@@ -181,9 +190,12 @@ src/
   brain/claude.ts     Anthropic wrapper + system prompt loader
   brain/classify.ts   scenario A/B/C classifier
   brain/draft.ts      email + LinkedIn drafters
+  server.ts           HTTP server: /health + /webhooks/expandi
   channels/gmail.ts   Gmail drafts/send
-  channels/linkedin.ts LinkedIn human queue (feed for 3rd-party tool)
-  channels/sheets.ts  Google Sheet lead tracker
+  channels/linkedin.ts LinkedIn backup queue
+  channels/expandi.ts push leads into Expandi campaigns
+  channels/sheets.ts  Google Sheet lead tracker (Leads + Companies tabs)
+  pipeline/engagement.ts  on accept/reply → phone + status update + alert
   pipeline/cadence.ts follow-up cadence
   pipeline/run.ts     orchestration
   store/store.ts      persistence (JSON; swap for Postgres)

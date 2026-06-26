@@ -32,6 +32,17 @@ const schema = z.object({
   SERPAPI_KEY: z.string().default(""),
   SIGNAGE_IMAGES: z.coerce.number().int().positive().default(4),
 
+  // ---- Expandi (LinkedIn automation, webhook-based both ways) ----
+  // The unique "add a lead to a campaign" webhook URL you generate inside
+  // Expandi (Open API / incoming webhook). Empty = Expandi push disabled.
+  EXPANDI_ADD_LEAD_URL: z.string().default(""),
+  // Shared secret you set in Expandi's outbound webhook, checked on inbound events.
+  EXPANDI_WEBHOOK_SECRET: z.string().default(""),
+  // HTTP server: health check + Expandi event receiver.
+  PORT: z.coerce.number().int().positive().default(8080),
+  // Where engagement alerts (connection accepted / replied) are emailed. Empty = no email alert.
+  ALERT_EMAIL: z.string().default(""),
+
   // Behavior
   RUN_CRON: z.string().default("0 13 * * 1-5"), // 13:00 UTC, weekdays
   ACCOUNTS_PER_RUN: z.coerce.number().int().positive().default(10),

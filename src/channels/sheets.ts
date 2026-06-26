@@ -31,6 +31,7 @@ const LEADS_HEADER = [
   "Email Subject",
   "LinkedIn Note",
   "LinkedIn Follow-up",
+  "Prospect ID",
 ];
 
 const COMPANIES_HEADER = [
@@ -147,6 +148,7 @@ export async function appendLead(input: LeadRowInput): Promise<void> {
     emailDraft?.subject ?? "",
     li.note,
     li.followUp,
+    contact.prospectId,
   ];
 
   if (config.DRY_RUN) {
@@ -201,4 +203,70 @@ export async function appendCompany(input: CompanyRowInput): Promise<void> {
   }
   await appendRow(config.SHEETS_COMPANIES_TAB, COMPANIES_HEADER, row);
   log.info("sheets.companyAppended", { company: account.name, tier: tierFor(account.numLocations) });
+}
+
+// ---- Updating a lead on engagement (webhook loop) ---------------------------
+
+function colLetter(index: number): string {
+  let n = index + 1;
+  let s = "";
+  while (n > 0) {
+    const r = (n - 1) % 26;
+    s = String.fromCharCode(65 + r) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
+export interface LeadUpdate {
+  linkedinStatus?: string;
+  callStatus?: string;
+  phone?: string;
+}
+
+/** Find a Leads row by Prospect ID and update its status/phone cells. */
+export async function updateLeadByProspect(prospectId: string, updates: LeadUpdate): Promise<boolean> {
+  if (!config.SHEETS_SPREADSHEET_ID || config.DRY_RUN) return false;
+  const sheets = client();
+  const tab = config.SHEETS_TAB;
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: config.SHEETS_SPREADSHEET_ID,
+    range: `${tab}!A1:Z100000`,
+  });
+  const rows = res.data.values ?? [];
+  if (rows.length === 0) return false;
+
+  const header = (rows[0] ?? []).map((h) => String(h));
+  const col = (name: string) => header.indexOf(name);
+  const pidCol = col("Prospect ID");
+  if (pidCol < 0) return false;
+
+  let rowIdx = -1;
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i]?.[pidCol] ?? "") === prospectId) {
+      rowIdx = i;
+      break;
+    }
+  }
+  if (rowIdx < 0) return false;
+  const rowNum = rowIdx + 1; // 1-based for A1 notation
+
+  const data: { range: string; values: string[][] }[] = [];
+  const setCell = (name: string, value?: string) => {
+    if (value == null) return;
+    const c = col(name);
+    if (c < 0) return;
+    data.push({ range: `${tab}!${colLetter(c)}${rowNum}`, values: [[value]] });
+  };
+  setCell("LinkedIn Status", updates.linkedinStatus);
+  setCell("Call Status", updates.callStatus);
+  setCell("Phone", updates.phone);
+  if (data.length === 0) return false;
+
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId: config.SHEETS_SPREADSHEET_ID,
+    requestBody: { valueInputOption: "USER_ENTERED", data },
+  });
+  log.info("sheets.leadUpdated", { prospectId, fields: data.length });
+  return true;
 }

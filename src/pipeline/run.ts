@@ -6,6 +6,7 @@ import { classifyAccount } from "../brain/classify.js";
 import { draftEmail, draftLinkedIn } from "../brain/draft.js";
 import { deliverEmail } from "../channels/gmail.js";
 import { queueLinkedIn } from "../channels/linkedin.js";
+import { pushToExpandi } from "../channels/expandi.js";
 import { appendLead, appendCompany } from "../channels/sheets.js";
 import { store } from "../store/store.js";
 import { nextActionAt } from "./cadence.js";
@@ -70,7 +71,8 @@ export async function runOutreachPass(): Promise<void> {
           const res = await deliverEmail(contact.email, email);
           gmailDraftId = res.id;
         }
-        await queueLinkedIn(contact, account.name, linkedin);
+        await queueLinkedIn(contact, account.name, linkedin); // local backup feed
+        await pushToExpandi(contact, account.name, linkedin); // auto add+message via Expandi
 
         const emailStatus = config.AUTO_SEND === "send" ? "Sent" : "Drafted";
         await appendLead({

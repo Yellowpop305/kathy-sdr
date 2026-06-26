@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { config } from "./config.js";
 import { log } from "./logger.js";
 import { runOutreachPass } from "./pipeline/run.js";
+import { startServer } from "./server.js";
 
 /**
  * Entry point.
@@ -30,6 +31,9 @@ async function main() {
     process.exit(1);
   }
 
+  // HTTP server: health check + Expandi engagement webhooks (keeps process alive).
+  startServer();
+
   cron.schedule(config.RUN_CRON, () => {
     runOutreachPass().catch((err) =>
       log.error("run.unhandled", { error: String(err) }),
@@ -37,9 +41,6 @@ async function main() {
   });
 
   log.info("kathy.scheduled", { cron: config.RUN_CRON });
-
-  // Keep the process alive.
-  process.stdin.resume();
 }
 
 main().catch((err) => {
